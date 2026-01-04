@@ -88,3 +88,10 @@ def search(q: str = Query(...)):
             {"_id": 0}
         )))
     return merge_movies(docs)
+
+@app.get("/movies")
+def movies():
+    docs = []
+    for col in collections:
+        docs.extend(list(col.find({}, {"_id": 0})))
+    return merge_movies(docs)
