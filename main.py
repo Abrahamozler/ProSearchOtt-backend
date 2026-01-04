@@ -86,7 +86,7 @@ def movies():
     for col in collections:
         docs.extend(list(col.find({}, {"_id": 0})))
     return merge_movies(docs)
-
+    
 @app.get("/search")
 def search(q: str = Query(...)):
     docs = []
