@@ -1,71 +1,84 @@
 from fastapi import FastAPI, Query
 from pymongo import MongoClient
-import os
+from fastapi.middleware.cors import CORSMiddleware
+import os, re
 
-app = FastAPI(title="MovieFlix Backend")
+app = FastAPI()
 
-# ------------------ Mongo Setup ------------------
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-MONGO_URL = os.getenv("MONGO_URL")
-DATABASE_NAME = os.getenv("DATABASE_NAME", "Media")
+# ---------- Mongo (4 DB URLs) ----------
+DATABASE_NAME = "Media"
+COLLECTION_NAME = "Cluster0"
 
-DB1_NAME = os.getenv("DB1_NAME")  # Media1
-DB2_NAME = os.getenv("DB2_NAME")  # Media2
-DB3_NAME = os.getenv("DB3_NAME")  # Media3
-DB4_NAME = os.getenv("DB4_NAME")  # Media4
+collections = []
 
-client = MongoClient(MONGO_URL)
-db = client[DATABASE_NAME]
+for key in ["DB1_URL", "DB2_URL", "DB3_URL", "DB4_URL"]:
+    url = os.getenv(key)
+    if url:
+        client = MongoClient(url)
+        collections.append(client[DATABASE_NAME][COLLECTION_NAME])
 
-COLLECTION_NAMES = [DB1_NAME, DB2_NAME, DB3_NAME, DB4_NAME]
-collections = [db[name] for name in COLLECTION_NAMES if name]
+# ---------- Helpers ----------
+def parse_file(file_name: str):
+    # Quality
+    q = re.search(r"(2160p|1080p|720p|480p)", file_name)
+    quality = q.group(1) if q else "unknown"
 
-# ------------------ Helpers ------------------
+    # Episode
+    e = re.search(r"(S\d{2}E\d{2})", file_name, re.I)
+    episode = e.group(1).upper() if e else ""
+
+    # Title (simple cleanup)
+    title = re.sub(r"@\w+|S\d{2}E\d{2}|2160p|1080p|720p|480p|x264|x265|WEB.*", "", file_name, flags=re.I)
+    title = title.replace(".", " ").replace("_", " ").strip()
+
+    movie_id = f"{title}_{episode}".lower().replace(" ", "_")
+
+    return movie_id, title, quality
 
 def merge_movies(docs):
-    """
-    Merge same movie_id from all collections
-    Return only available qualities
-    """
     result = {}
 
     for doc in docs:
-        movie_id = doc.get("movie_id")
-        if not movie_id:
-            continue
+        fname = doc.get("file_name") or ""
+        movie_id, title, quality = parse_file(fname)
 
         result.setdefault(movie_id, {
             "movie_id": movie_id,
-            "title": doc.get("title", "Unknown"),
-            "poster": doc.get("poster"),
+            "title": title,
+            "poster": None,
             "files": []
         })
 
-        result[movie_id]["files"].append({
-            "quality": doc.get("quality")
-        })
+        if quality not in [f["quality"] for f in result[movie_id]["files"]]:
+            result[movie_id]["files"].append({"quality": quality})
 
     return list(result.values())
 
-# ------------------ API Routes ------------------
-
+# ---------- Routes ----------
 @app.get("/")
 def root():
-    return {"status": "MovieFlix backend running"}
+    return {"status": "Backend running (auto parse DB)"}
 
 @app.get("/movies")
-def get_movies():
+def movies():
     docs = []
     for col in collections:
         docs.extend(list(col.find({}, {"_id": 0})))
     return merge_movies(docs)
 
 @app.get("/search")
-def search_movies(q: str = Query(..., min_length=1)):
+def search(q: str = Query(...)):
     docs = []
     for col in collections:
         docs.extend(list(col.find(
-            {"title": {"$regex": q, "$options": "i"}},
+            {"file_name": {"$regex": q, "$options": "i"}},
             {"_id": 0}
         )))
     return merge_movies(docs)
