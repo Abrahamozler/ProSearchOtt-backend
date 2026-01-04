@@ -12,7 +12,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------- Mongo (4 DB URLs) ----------
 DATABASE_NAME = "Media"
 COLLECTION_NAME = "Cluster0"
 
@@ -24,18 +23,20 @@ for key in ["DB1_URL", "DB2_URL", "DB3_URL", "DB4_URL"]:
         client = MongoClient(url)
         collections.append(client[DATABASE_NAME][COLLECTION_NAME])
 
-# ---------- Helpers ----------
-def parse_file(file_name: str):
+def parse_text(text: str):
+    if not text:
+        return None, None, None
+
     # Quality
-    q = re.search(r"(2160p|1080p|720p|480p)", file_name)
-    quality = q.group(1) if q else "unknown"
+    q = re.search(r"(2160p|1080p|720p|480p)", text, re.I)
+    quality = q.group(1).lower() if q else "unknown"
 
     # Episode
-    e = re.search(r"(S\d{2}E\d{2})", file_name, re.I)
+    e = re.search(r"(S\d{2}E\d{2})", text, re.I)
     episode = e.group(1).upper() if e else ""
 
-    # Title (simple cleanup)
-    title = re.sub(r"@\w+|S\d{2}E\d{2}|2160p|1080p|720p|480p|x264|x265|WEB.*", "", file_name, flags=re.I)
+    # Title cleanup
+    title = re.sub(r"<.*?>|@\w+|S\d{2}E\d{2}|2160p|1080p|720p|480p|x264|x265|WEB.*", "", text, flags=re.I)
     title = title.replace(".", " ").replace("_", " ").strip()
 
     movie_id = f"{title}_{episode}".lower().replace(" ", "_")
@@ -46,8 +47,11 @@ def merge_movies(docs):
     result = {}
 
     for doc in docs:
-        fname = doc.get("file_name") or ""
-        movie_id, title, quality = parse_file(fname)
+        source_text = doc.get("file_name") or doc.get("caption")
+        movie_id, title, quality = parse_text(source_text)
+
+        if not movie_id:
+            continue
 
         result.setdefault(movie_id, {
             "movie_id": movie_id,
@@ -61,10 +65,9 @@ def merge_movies(docs):
 
     return list(result.values())
 
-# ---------- Routes ----------
 @app.get("/")
 def root():
-    return {"status": "Backend running (auto parse DB)"}
+    return {"status": "Backend running (file_name + caption parse)"}
 
 @app.get("/movies")
 def movies():
@@ -78,7 +81,10 @@ def search(q: str = Query(...)):
     docs = []
     for col in collections:
         docs.extend(list(col.find(
-            {"file_name": {"$regex": q, "$options": "i"}},
+            {"$or": [
+                {"file_name": {"$regex": q, "$options": "i"}},
+                {"caption": {"$regex": q, "$options": "i"}}
+            ]},
             {"_id": 0}
         )))
     return merge_movies(docs)
