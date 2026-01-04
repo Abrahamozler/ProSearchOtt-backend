@@ -1,1 +1,1 @@
-# ProSearchOtt-backend
+FastAPI backend with /movies and /search endpoints
