@@ -2,7 +2,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from mongo import clients
 from parser import parse_title, parse_quality
-from tmdb import tmdb_data
 
 app = FastAPI()
 
@@ -10,7 +9,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
-    allow_headers=["*"]
+    allow_headers=["*"],
 )
 
 @app.get("/")
@@ -22,51 +21,65 @@ def movies():
     result = {}
 
     for coll in clients:
-        for d in coll.find().sort("_id", -1).limit(500):
-            title = parse_title(d.get("file_name",""))
-            q = parse_quality(d.get("file_name",""))
+        try:
+            cursor = coll.find({}, {
+                "file_name": 1,
+                "file_ref": 1
+            }).limit(300)
 
-            if title not in result:
-                result[title] = {
-                    "title": title,
-                    "movie_id": title.replace(" ", "_").lower(),
-                    "files": [],
-                    **tmdb_data(title)
-                }
+            for d in cursor:
+                name = d.get("file_name")
+                if not name:
+                    continue
 
-            result[title]["files"].append({
-                "quality": q,
-                "file_ref": d.get("file_ref")
-            })
+                title = parse_title(name)
+                quality = parse_quality(name)
+
+                if title not in result:
+                    result[title] = {
+                        "title": title,
+                        "movie_id": title.replace(" ", "_").lower(),
+                        "files": []
+                    }
+
+                result[title]["files"].append({
+                    "quality": quality
+                })
+
+        except Exception as e:
+            print("DB error:", e)
 
     return list(result.values())
+
 
 @app.get("/search")
 def search(q: str):
     result = {}
 
     for coll in clients:
-        for d in coll.find({
-            "$or":[
-                {"file_name":{"$regex":q,"$options":"i"}},
-                {"caption":{"$regex":q,"$options":"i"}}
-            ]
-        }).limit(100):
+        try:
+            cursor = coll.find(
+                {"file_name": {"$regex": q, "$options": "i"}},
+                {"file_name": 1}
+            ).limit(100)
 
-            title = parse_title(d.get("file_name",""))
-            ql = parse_quality(d.get("file_name",""))
+            for d in cursor:
+                name = d.get("file_name")
+                title = parse_title(name)
+                quality = parse_quality(name)
 
-            if title not in result:
-                result[title] = {
-                    "title": title,
-                    "movie_id": title.replace(" ", "_").lower(),
-                    "files": [],
-                    **tmdb_data(title)
-                }
+                if title not in result:
+                    result[title] = {
+                        "title": title,
+                        "movie_id": title.replace(" ", "_").lower(),
+                        "files": []
+                    }
 
-            result[title]["files"].append({
-                "quality": ql,
-                "file_ref": d.get("file_ref")
-            })
+                result[title]["files"].append({
+                    "quality": quality
+                })
+
+        except Exception as e:
+            print("Search error:", e)
 
     return list(result.values())
