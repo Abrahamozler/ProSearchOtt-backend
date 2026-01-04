@@ -8,7 +8,7 @@ app = FastAPI()
 client = MongoClient(os.getenv("MONGO_URL"))
 db = client[os.getenv("MONGO_DB", "cluster0")]
 
-# Load all collections (DB names don't matter)
+# Load mixed collections (DB name irrelevant)
 COLLECTION_NAMES = [
     os.getenv("DB1_NAME"),
     os.getenv("DB2_NAME"),
@@ -18,7 +18,6 @@ COLLECTION_NAMES = [
 
 collections = [db[name] for name in COLLECTION_NAMES if name]
 
-# -------- HELPERS --------
 def merge_docs(docs):
     result = {}
     for doc in docs:
@@ -34,7 +33,6 @@ def merge_docs(docs):
         })
     return list(result.values())
 
-# -------- API --------
 @app.get("/movies")
 def movies_list():
     docs = []
