@@ -1,130 +1,72 @@
-from fastapi import FastAPI, Query
-from pymongo import MongoClient
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import os
-import re
+from mongo import clients
+from parser import parse_title, parse_quality
+from tmdb import tmdb_data
 
 app = FastAPI()
 
-# -------------------- CORS --------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"]
 )
 
-# -------------------- Mongo Config --------------------
-DATABASE_NAME = "Media"
-COLLECTION_NAME = "Cluster0"
-
-_collections = None
-
-def get_collections():
-    """
-    Create Mongo connections lazily (ONLY ONCE).
-    Prevents Koyeb worker crash.
-    """
-    global _collections
-    if _collections is not None:
-        return _collections
-
-    _collections = []
-    for key in ["DB1_URL", "DB2_URL", "DB3_URL", "DB4_URL"]:
-        url = os.getenv(key)
-        if not url:
-            continue
-
-        client = MongoClient(
-            url,
-            serverSelectionTimeoutMS=5000,
-            connectTimeoutMS=5000,
-            socketTimeoutMS=5000,
-            maxPoolSize=5
-        )
-        _collections.append(client[DATABASE_NAME][COLLECTION_NAME])
-
-    return _collections
-
-# -------------------- Helpers --------------------
-def parse_text(text: str):
-    if not text:
-        return None, None, None
-
-    # Quality
-    q = re.search(r"(2160p|1080p|720p|480p)", text, re.I)
-    quality = q.group(1) if q else "unknown"
-
-    # Episode
-    e = re.search(r"(S\d{2}E\d{2})", text, re.I)
-    episode = e.group(1).upper() if e else ""
-
-    # Title cleanup
-    title = re.sub(
-        r"<.*?>|@\w+|S\d{2}E\d{2}|2160p|1080p|720p|480p|x264|x265|WEB.*",
-        "",
-        text,
-        flags=re.I
-    )
-    title = title.replace(".", " ").replace("_", " ").strip()
-
-    movie_id = f"{title}_{episode}".lower().replace(" ", "_") if title else None
-    return movie_id, title, quality
-
-
-def merge_movies(docs):
-    result = {}
-
-    for doc in docs:
-        source = doc.get("file_name") or doc.get("caption")
-        movie_id, title, quality = parse_text(source)
-
-        # Never skip a document
-        if not movie_id:
-            movie_id = "unknown_" + str(abs(hash(source)))
-            title = title or "Unknown"
-
-        result.setdefault(movie_id, {
-            "movie_id": movie_id,
-            "title": title,
-            "poster": None,
-            "files": []
-        })
-
-        if quality not in [f["quality"] for f in result[movie_id]["files"]]:
-            result[movie_id]["files"].append({"quality": quality})
-
-    return list(result.values())
-
-# -------------------- Routes --------------------
 @app.get("/")
 def root():
-    return {"status": "Backend running (stable, mongo enabled)"}
+    return {"status": "Backend running"}
 
 @app.get("/movies")
 def movies():
-    docs = []
-    for col in get_collections():
-        docs.extend(
-            list(col.find({}, {"_id": 0}).limit(200))
-        )
-    return merge_movies(docs)
+    result = {}
+
+    for coll in clients:
+        for d in coll.find().sort("_id", -1).limit(500):
+            title = parse_title(d.get("file_name",""))
+            q = parse_quality(d.get("file_name",""))
+
+            if title not in result:
+                result[title] = {
+                    "title": title,
+                    "movie_id": title.replace(" ", "_").lower(),
+                    "files": [],
+                    **tmdb_data(title)
+                }
+
+            result[title]["files"].append({
+                "quality": q,
+                "file_ref": d.get("file_ref")
+            })
+
+    return list(result.values())
 
 @app.get("/search")
-def search(q: str = Query(..., min_length=1)):
-    docs = []
-    for col in get_collections():
-        docs.extend(
-            list(
-                col.find(
-                    {
-                        "$or": [
-                            {"file_name": {"$regex": q, "$options": "i"}},
-                            {"caption": {"$regex": q, "$options": "i"}}
-                        ]
-                    },
-                    {"_id": 0}
-                ).limit(200)
-            )
-        )
-    return merge_movies(docs)
+def search(q: str):
+    result = {}
+
+    for coll in clients:
+        for d in coll.find({
+            "$or":[
+                {"file_name":{"$regex":q,"$options":"i"}},
+                {"caption":{"$regex":q,"$options":"i"}}
+            ]
+        }).limit(100):
+
+            title = parse_title(d.get("file_name",""))
+            ql = parse_quality(d.get("file_name",""))
+
+            if title not in result:
+                result[title] = {
+                    "title": title,
+                    "movie_id": title.replace(" ", "_").lower(),
+                    "files": [],
+                    **tmdb_data(title)
+                }
+
+            result[title]["files"].append({
+                "quality": ql,
+                "file_ref": d.get("file_ref")
+            })
+
+    return list(result.values())
